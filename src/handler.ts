@@ -13,6 +13,8 @@ class HttpError extends Error {
 const fixCors = ({ headers, status, statusText }: { headers?: HeadersInit; status?: number; statusText?: string }) => {
 	const newHeaders = new Headers(headers);
 	newHeaders.set('Access-Control-Allow-Origin', '*');
+	newHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+	newHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-goog-api-key');
 	return { headers: newHeaders, status, statusText };
 };
 
@@ -44,6 +46,12 @@ export class LoadBalancer extends DurableObject {
 	}
 
 	async fetch(request: Request): Promise<Response> {
+		if (request.method === 'OPTIONS') {
+			return new Response(null, {
+				status: 204,
+				headers: fixCors({}).headers,
+			});
+		}
 		const url = new URL(request.url);
 		const pathname = url.pathname;
 
