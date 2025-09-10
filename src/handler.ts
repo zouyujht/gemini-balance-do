@@ -101,6 +101,11 @@ export class LoadBalancer extends DurableObject {
 		const authKey = this.env.AUTH_KEY;
 
 		let targetUrl = `${BASE_URL}${pathname}${search}`;
+
+		if (this.env.FORWARD_CLIENT_KEY_ENABLED) {
+			return this.forwardRequestWithLoadBalancing(targetUrl, request);
+		}
+
 		if (authKey) {
 			let isAuthorized = false;
 			// Check key in query parameters
@@ -154,18 +159,22 @@ export class LoadBalancer extends DurableObject {
 	// 对请求进行负载均衡，随机分发key
 	private async forwardRequestWithLoadBalancing(targetUrl: string, request: Request): Promise<Response> {
 		try {
-			const apiKey = await this.getRandomApiKey();
-			if (!apiKey) {
-				return new Response('No API keys configured in the load balancer.', { status: 500 });
-			}
 			let headers = new Headers();
+			const url = new URL(targetUrl);
 
 			// Forward content-type header
 			if (request.headers.has('content-type')) {
 				headers.set('content-type', request.headers.get('content-type')!);
 			}
 
-			const url = new URL(targetUrl);
+			if (this.env.FORWARD_CLIENT_KEY_ENABLED) {
+				return this.forwardRequest(url.toString(), request, headers);
+			}
+			const apiKey = await this.getRandomApiKey();
+			if (!apiKey) {
+				return new Response('No API keys configured in the load balancer.', { status: 500 });
+			}
+
 			url.searchParams.set('key', apiKey);
 			headers.set('x-goog-api-key', apiKey);
 			return this.forwardRequest(url.toString(), request, headers);
@@ -873,13 +882,26 @@ export class LoadBalancer extends DurableObject {
 
 	private async handleOpenAI(request: Request): Promise<Response> {
 		const authKey = this.env.AUTH_KEY;
-		if (authKey) {
+		let apiKey: string | null;
+
+		const authHeader = request.headers.get('Authorization');
+		apiKey = authHeader?.replace('Bearer ', '') ?? null;
+		if (!apiKey) {
+			return new Response('No API key found in the client headers,please check your request!', { status: 400 });
+		}
+
+		if (authKey && !this.env.FORWARD_CLIENT_KEY_ENABLED) {
 			const authHeader = request.headers.get('Authorization');
 			const token = authHeader?.replace('Bearer ', '');
 			if (token !== authKey) {
 				return new Response('Unauthorized', { status: 401, headers: fixCors({}).headers });
 			}
+			apiKey = await this.getRandomApiKey();
+			if (!apiKey) {
+				return new Response('No API keys configured in the load balancer.', { status: 500 });
+			}
 		}
+
 		const url = new URL(request.url);
 		const pathname = url.pathname;
 
@@ -892,11 +914,6 @@ export class LoadBalancer extends DurableObject {
 			console.error(err);
 			return new Response(err.message, fixCors({ statusText: err.message ?? 'Internal Server Error', status: 500 }));
 		};
-
-		const apiKey = await this.getRandomApiKey();
-		if (!apiKey) {
-			return new Response('No API keys configured in the load balancer.', { status: 500 });
-		}
 
 		switch (true) {
 			case pathname.endsWith('/chat/completions'):
