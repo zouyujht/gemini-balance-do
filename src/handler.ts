@@ -75,13 +75,13 @@ export class LoadBalancer extends DurableObject {
 				return this.handleApiKeys(request);
 			}
 			if (pathname === '/api/keys' && request.method === 'GET') {
-				return this.getAllApiKeys();
+				return this.getAllApiKeys(request);
 			}
 			if (pathname === '/api/keys' && request.method === 'DELETE') {
 				return this.handleDeleteApiKeys(request);
 			}
-			if (pathname === '/api/keys/check' && request.method === 'GET') {
-				return this.handleApiKeysCheck();
+			if (pathname === '/api/keys/check' && request.method === 'POST') {
+				return this.handleApiKeysCheck(request);
 			}
 		}
 
@@ -803,10 +803,15 @@ export class LoadBalancer extends DurableObject {
 		}
 	}
 
-	async handleApiKeysCheck(): Promise<Response> {
+	async handleApiKeysCheck(request: Request): Promise<Response> {
 		try {
-			const results = await this.ctx.storage.sql.exec('SELECT api_key FROM api_keys').raw<any>();
-			const keys = Array.from(results);
+			const { keys } = (await request.json()) as { keys: string[] };
+			if (!Array.isArray(keys) || keys.length === 0) {
+				return new Response(JSON.stringify({ error: '请求体无效，需要一个包含key的非空数组。' }), {
+					status: 400,
+					headers: { 'Content-Type': 'application/json' },
+				});
+			}
 
 			const checkResults = await Promise.all(
 				keys.map(async (key) => {
@@ -844,11 +849,21 @@ export class LoadBalancer extends DurableObject {
 		}
 	}
 
-	async getAllApiKeys(): Promise<Response> {
+	async getAllApiKeys(request: Request): Promise<Response> {
 		try {
-			const results = await this.ctx.storage.sql.exec('SELECT * FROM api_keys').raw<any>();
-			const keys = Array.from(results);
-			return new Response(JSON.stringify({ keys }), {
+			const url = new URL(request.url);
+			const page = parseInt(url.searchParams.get('page') || '1', 10);
+			const pageSize = parseInt(url.searchParams.get('pageSize') || '50', 10);
+			const offset = (page - 1) * pageSize;
+
+			const totalResult = await this.ctx.storage.sql.exec('SELECT COUNT(*) as count FROM api_keys').raw<any>();
+			const totalArray = Array.from(totalResult);
+			const total = totalArray.length > 0 ? totalArray[0][0] : 0;
+
+			const results = await this.ctx.storage.sql.exec('SELECT api_key FROM api_keys LIMIT ? OFFSET ?', pageSize, offset).raw<any>();
+			const keys = results ? Array.from(results).map((row: any) => row[0]) : [];
+
+			return new Response(JSON.stringify({ keys, total }), {
 				headers: { 'Content-Type': 'application/json' },
 			});
 		} catch (error: any) {

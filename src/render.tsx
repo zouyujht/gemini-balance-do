@@ -71,9 +71,7 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 				{showWarning && (
 					<div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-3 mb-4" role="alert">
 						<strong class="font-bold">安全警告：</strong>
-						<span class="block">
-							当前 HOME_ACCESS_KEY 或 AUTH_KEY 为默认值，请尽快修改环境变量并重新部署 Worker！
-						</span>
+						<span class="block">当前 HOME_ACCESS_KEY 或 AUTH_KEY 为默认值，请尽快修改环境变量并重新部署 Worker！</span>
 					</div>
 				)}
 				<div class="flex h-screen">
@@ -111,6 +109,12 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 										<button id="refresh-keys-btn" class="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition">
 											刷新
 										</button>
+										<button
+											id="select-invalid-keys-btn"
+											class="px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600 transition ml-2 hidden"
+										>
+											勾选无效密钥
+										</button>
 									</div>
 								</div>
 								<div class="max-h-60 overflow-y-auto">
@@ -126,6 +130,23 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 										</thead>
 										<tbody></tbody>
 									</table>
+								</div>
+								<div id="pagination-controls" class="mt-4 flex justify-center items-center">
+									<button
+										id="prev-page-btn"
+										class="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition disabled:opacity-50"
+										disabled
+									>
+										上一页
+									</button>
+									<span id="page-info" class="mx-4 text-gray-600"></span>
+									<button
+										id="next-page-btn"
+										class="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition disabled:opacity-50"
+										disabled
+									>
+										下一页
+									</button>
 								</div>
 								<button
 									id="delete-selected-keys-btn"
@@ -149,12 +170,29 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 										const selectAllCheckbox = document.getElementById('select-all-keys');
 										const deleteSelectedBtn = document.getElementById('delete-selected-keys-btn');
 										const checkKeysBtn = document.getElementById('check-keys-btn');
+										const paginationControls = document.getElementById('pagination-controls');
+										const prevPageBtn = document.getElementById('prev-page-btn');
+										const nextPageBtn = document.getElementById('next-page-btn');
+										const pageInfoSpan = document.getElementById('page-info');
+										const selectInvalidKeysBtn = document.getElementById('select-invalid-keys-btn');
+
+										let currentPage = 1;
+										const pageSize = 50;
+										let totalPages = 1;
+
+										const updatePaginationControls = () => {
+												pageInfoSpan.textContent = \`第 \${currentPage} / \${totalPages} 页\`;
+												prevPageBtn.disabled = currentPage === 1;
+												nextPageBtn.disabled = currentPage >= totalPages;
+										};
 
 										const fetchAndRenderKeys = async () => {
 												keysTableBody.innerHTML = '<tr><td colspan="3" class="p-2 text-center">加载中...</td></tr>';
 												try {
-												  const response = await fetch('/api/keys');
-												  const { keys } = await response.json();
+												  const response = await fetch(\`/api/keys?page=\${currentPage}&pageSize=\${pageSize}\`);
+												  const { keys, total } = await response.json();
+												  
+												  totalPages = Math.ceil(total / pageSize);
 												  keysTableBody.innerHTML = '';
 												  if (keys.length === 0) {
 												    keysTableBody.innerHTML = '<tr><td colspan="3" class="p-2 text-center">暂无密钥</td></tr>';
@@ -170,6 +208,7 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 												      keysTableBody.appendChild(row);
 												    });
 												  }
+												  updatePaginationControls();
 												} catch (error) {
 												  keysTableBody.innerHTML = '<tr><td colspan="3" class="p-2 text-center text-red-500">加载失败</td></tr>';
 												  console.error('Failed to fetch keys:', error);
@@ -228,7 +267,9 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 										});
 
 										checkKeysBtn.addEventListener('click', async () => {
-											const rows = keysTableBody.querySelectorAll('tr');
+											const rows = keysTableBody.querySelectorAll('tr[data-key]');
+											const keysToCheck = Array.from(rows).map(row => row.dataset.key);
+
 											rows.forEach(row => {
 												const statusCell = row.querySelector('.status-cell');
 												if (statusCell) {
@@ -238,7 +279,11 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 											});
 
 											try {
-												const response = await fetch('/api/keys/check');
+												const response = await fetch('/api/keys/check', {
+													method: 'POST',
+													headers: { 'Content-Type': 'application/json' },
+													body: JSON.stringify({ keys: keysToCheck }),
+												});
 												const results = await response.json();
 												results.forEach(result => {
 													const row = keysTableBody.querySelector(\`tr[data-key="\${result.key}"]\`);
@@ -250,10 +295,25 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 														}
 													}
 												});
+												selectInvalidKeysBtn.classList.remove('hidden');
 											} catch (error) {
 												alert('检查密钥失败，请查看控制台获取更多信息。');
 												console.error('Failed to check keys:', error);
 											}
+										});
+
+										selectInvalidKeysBtn.addEventListener('click', () => {
+											const rows = keysTableBody.querySelectorAll('tr');
+											rows.forEach(row => {
+												const statusCell = row.querySelector('.status-cell');
+												if (statusCell && statusCell.textContent === '无效') {
+													const checkbox = row.querySelector('.key-checkbox');
+													if (checkbox) {
+														checkbox.checked = true;
+													}
+												}
+											});
+											updateDeleteButtonVisibility();
 										});
 
 										addKeysForm.addEventListener('submit', async (e) => {
@@ -284,6 +344,20 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 										});
 
 										refreshKeysBtn.addEventListener('click', fetchAndRenderKeys);
+
+										prevPageBtn.addEventListener('click', () => {
+												if (currentPage > 1) {
+												  currentPage--;
+												  fetchAndRenderKeys();
+												}
+										});
+
+										nextPageBtn.addEventListener('click', () => {
+												if (currentPage < totalPages) {
+												  currentPage++;
+												  fetchAndRenderKeys();
+												}
+										});
 
 										// Initial load
 										fetchAndRenderKeys();
