@@ -61,10 +61,7 @@ export class LoadBalancer extends DurableObject {
 		}
 
 		// 管理 API 权限校验（使用 HOME_ACCESS_KEY）
-		if (
-			(pathname === '/api/keys' && ['POST', 'GET', 'DELETE'].includes(request.method)) ||
-			(pathname === '/api/keys/check' && request.method === 'GET')
-		) {
+		if (pathname === '/api/keys' || pathname === '/api/keys/check') {
 			if (!isAdminAuthenticated(request, this.env.HOME_ACCESS_KEY)) {
 				return new Response(JSON.stringify({ error: 'Unauthorized' }), {
 					status: 401,
