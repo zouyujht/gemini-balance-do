@@ -445,42 +445,44 @@ export class LoadBalancer extends DurableObject {
 		return cfg;
 	}
 
-	private async transformMessages(messages: any[]) {
-		if (!messages) {
-			return {};
-		}
-
-		const contents: any[] = [];
-		let system_instruction;
-
-		for (const item of messages) {
-			switch (item.role) {
-				case 'system':
-					system_instruction = { parts: await this.transformMsg(item) };
-					continue;
-				case 'assistant':
-					item.role = 'model';
-					break;
-				case 'user':
-					break;
-				default:
-					throw new HttpError(`Unknown message role: "${item.role}"`, 400);
-			}
-
-			if (system_instruction) {
-				if (!contents[0]?.parts.some((part: any) => part.text)) {
-					contents.unshift({ role: 'user', parts: { text: ' ' } });
-				}
-			}
-
-			contents.push({
-				role: item.role,
-				parts: await this.transformMsg(item),
-			});
-		}
-
-		return { system_instruction, contents };
+private async transformMessages(messages: any[]) {
+	if (!messages) {
+		return {};
 	}
+
+	const contents: any[] = [];
+	let system_instruction;
+
+	for (const item of messages) {
+		switch (item.role) {
+			case 'system':
+				system_instruction = { parts: await this.transformMsg(item) };
+				continue;
+			case 'assistant':
+				item.role = 'model';
+				break;
+			case 'user':
+				break;
+			default:
+				throw new HttpError(`Unknown message role: "${item.role}"`, 400);
+		}
+
+		if (system_instruction) {
+			// 修复：确保 parts 是数组后再调用 some 方法
+			if (!contents[0]?.parts || 
+				(Array.isArray(contents[0]?.parts) && !contents[0]?.parts.some((part: any) => part.text))) {
+				contents.unshift({ role: 'user', parts: [{ text: ' ' }] });
+			}
+		}
+
+		contents.push({
+			role: item.role,
+			parts: await this.transformMsg(item),
+		});
+	}
+
+	return { system_instruction, contents };
+}
 
 	private async transformMsg({ content }: any) {
 		const parts = [];
