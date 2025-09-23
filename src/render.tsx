@@ -126,6 +126,9 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 												</th>
 												<th class="p-2">API 密钥</th>
 												<th class="p-2">状态</th>
+												<th class="p-2">分组</th>
+												<th class="p-2">最后检查时间</th>
+												<th class="p-2">失败次数</th>
 											</tr>
 										</thead>
 										<tbody></tbody>
@@ -187,7 +190,7 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 										};
 
 										const fetchAndRenderKeys = async () => {
-												keysTableBody.innerHTML = '<tr><td colspan="3" class="p-2 text-center">加载中...</td></tr>';
+												keysTableBody.innerHTML = '<tr><td colspan="7" class="p-2 text-center">加载中...</td></tr>';
 												try {
 												  const response = await fetch(\`/api/keys?page=\${currentPage}&pageSize=\${pageSize}\`);
 												  const { keys, total } = await response.json();
@@ -195,22 +198,25 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 												  totalPages = Math.ceil(total / pageSize);
 												  keysTableBody.innerHTML = '';
 												  if (keys.length === 0) {
-												    keysTableBody.innerHTML = '<tr><td colspan="3" class="p-2 text-center">暂无密钥</td></tr>';
+												    keysTableBody.innerHTML = '<tr><td colspan="7" class="p-2 text-center">暂无密钥</td></tr>';
 												  } else {
 												    keys.forEach(key => {
 												      const row = document.createElement('tr');
-															row.dataset.key = key;
+															row.dataset.key = key.api_key;
 												      row.innerHTML = \`
-												        <td class="p-2 w-6"><input type="checkbox" class="key-checkbox" data-key="\${key}" /></td>
-												        <td class="p-2 font-mono">\${key}</td>
-												        <td class="p-2 status-cell">未知</td>
+												        <td class="p-2 w-6"><input type="checkbox" class="key-checkbox" data-key="\${key.api_key}" /></td>
+												        <td class="p-2 font-mono">\${key.api_key}</td>
+												        <td class="p-2 status-cell">\${key.status}</td>
+												        <td class="p-2">\${key.key_group}</td>
+												        <td class="p-2">\${key.last_checked_at ? new Date(key.last_checked_at).toLocaleString() : 'N/A'}</td>
+												        <td class="p-2">\${key.failed_count}</td>
 												      \`;
 												      keysTableBody.appendChild(row);
 												    });
 												  }
 												  updatePaginationControls();
 												} catch (error) {
-												  keysTableBody.innerHTML = '<tr><td colspan="3" class="p-2 text-center text-red-500">加载失败</td></tr>';
+												  keysTableBody.innerHTML = '<tr><td colspan="7" class="p-2 text-center text-red-500">加载失败</td></tr>';
 												  console.error('Failed to fetch keys:', error);
 												}
 										};

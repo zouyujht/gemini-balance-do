@@ -42,7 +42,92 @@ export class LoadBalancer extends DurableObject {
 		super(ctx, env);
 		this.env = env;
 		// Initialize the database schema upon first creation.
-		this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS api_keys (api_key TEXT PRIMARY KEY)');
+		this.ctx.storage.sql.exec(`
+			CREATE TABLE IF NOT EXISTS api_keys (
+				api_key TEXT PRIMARY KEY
+			);
+			CREATE TABLE IF NOT EXISTS api_key_statuses (
+				api_key TEXT PRIMARY KEY,
+				status TEXT CHECK(status IN ('normal', 'abnormal')) NOT NULL DEFAULT 'normal',
+				last_checked_at INTEGER,
+				failed_count INTEGER NOT NULL DEFAULT 0,
+				key_group TEXT CHECK(key_group IN ('normal', 'abnormal')) NOT NULL DEFAULT 'normal',
+				FOREIGN KEY(api_key) REFERENCES api_keys(api_key) ON DELETE CASCADE
+			);
+		`);
+		this.ctx.storage.setAlarm(Date.now() + 5 * 60 * 1000); // Set an alarm to run in 5 minutes
+	}
+
+	async alarm() {
+		// 1. Handle abnormal keys
+		const abnormalKeys = await this.ctx.storage.sql
+			.exec("SELECT api_key, failed_count FROM api_key_statuses WHERE key_group = 'abnormal'")
+			.raw<any>();
+
+		for (const row of Array.from(abnormalKeys)) {
+			const apiKey = row[0] as string;
+			const failedCount = row[1] as number;
+
+			try {
+				const response = await fetch(`${BASE_URL}/${API_VERSION}/models?key=${apiKey}`);
+				if (response.ok) {
+					// Key is working again, move it back to the normal group
+					await this.ctx.storage.sql.exec(
+						"UPDATE api_key_statuses SET key_group = 'normal', failed_count = 0, last_checked_at = ? WHERE api_key = ?",
+						Date.now(),
+						apiKey
+					);
+				} else if (response.status === 429) {
+					// Still getting 429, increment failed_count
+					const newFailedCount = failedCount + 1;
+					if (newFailedCount >= 5) {
+						// Delete the key if it has failed 5 times
+						await this.ctx.storage.sql.exec('DELETE FROM api_keys WHERE api_key = ?', apiKey);
+					} else {
+						await this.ctx.storage.sql.exec(
+							'UPDATE api_key_statuses SET failed_count = ?, last_checked_at = ? WHERE api_key = ?',
+							newFailedCount,
+							Date.now(),
+							apiKey
+						);
+					}
+				}
+			} catch (e) {
+				console.error(`Error checking abnormal key ${apiKey}:`, e);
+			}
+		}
+
+		// 2. Handle normal keys
+		const twelveHoursAgo = Date.now() - 12 * 60 * 60 * 1000;
+		const normalKeys = await this.ctx.storage.sql
+			.exec(
+				"SELECT api_key FROM api_key_statuses WHERE key_group = 'normal' AND (last_checked_at IS NULL OR last_checked_at < ?)",
+				twelveHoursAgo
+			)
+			.raw<any>();
+
+		for (const row of Array.from(normalKeys)) {
+			const apiKey = row[0] as string;
+			try {
+				const response = await fetch(`${BASE_URL}/${API_VERSION}/models?key=${apiKey}`);
+				if (response.status === 429) {
+					// Move to abnormal group
+					await this.ctx.storage.sql.exec(
+						"UPDATE api_key_statuses SET key_group = 'abnormal', failed_count = 1, last_checked_at = ? WHERE api_key = ?",
+						Date.now(),
+						apiKey
+					);
+				} else {
+					// Update last_checked_at
+					await this.ctx.storage.sql.exec('UPDATE api_key_statuses SET last_checked_at = ? WHERE api_key = ?', Date.now(), apiKey);
+				}
+			} catch (e) {
+				console.error(`Error checking normal key ${apiKey}:`, e);
+			}
+		}
+
+		// Reschedule the alarm
+		this.ctx.storage.setAlarm(Date.now() + 5 * 60 * 1000);
 	}
 
 	async fetch(request: Request): Promise<Response> {
@@ -128,7 +213,7 @@ export class LoadBalancer extends DurableObject {
 		return this.forwardRequestWithLoadBalancing(targetUrl, request);
 	}
 
-	async forwardRequest(targetUrl: string, request: Request, headers: Headers): Promise<Response> {
+	async forwardRequest(targetUrl: string, request: Request, headers: Headers, apiKey: string): Promise<Response> {
 		console.log(`Request Sending to Gemini: ${targetUrl}`);
 
 		const response = await fetch(targetUrl, {
@@ -136,6 +221,15 @@ export class LoadBalancer extends DurableObject {
 			headers: headers,
 			body: request.method === 'GET' || request.method === 'HEAD' ? null : request.body,
 		});
+
+		if (response.status === 429) {
+			console.log(`API key ${apiKey} received 429 status code.`);
+			await this.ctx.storage.sql.exec(
+				"UPDATE api_key_statuses SET key_group = 'abnormal', failed_count = failed_count + 1, last_checked_at = ? WHERE api_key = ?",
+				Date.now(),
+				apiKey
+			);
+		}
 
 		console.log('Call Gemini Success');
 
@@ -165,7 +259,7 @@ export class LoadBalancer extends DurableObject {
 			}
 
 			if (this.env.FORWARD_CLIENT_KEY_ENABLED) {
-				return this.forwardRequest(url.toString(), request, headers);
+				return this.forwardRequest(url.toString(), request, headers, ''); // No specific key for forwarded client key
 			}
 			const apiKey = await this.getRandomApiKey();
 			if (!apiKey) {
@@ -174,7 +268,7 @@ export class LoadBalancer extends DurableObject {
 
 			url.searchParams.set('key', apiKey);
 			headers.set('x-goog-api-key', apiKey);
-			return this.forwardRequest(url.toString(), request, headers);
+			return this.forwardRequest(url.toString(), request, headers, apiKey);
 		} catch (error) {
 			console.error('Failed to fetch:', error);
 			return new Response('Internal Server Error\n' + error, {
@@ -755,6 +849,7 @@ export class LoadBalancer extends DurableObject {
 
 			for (const key of keys) {
 				await this.ctx.storage.sql.exec('INSERT OR IGNORE INTO api_keys (api_key) VALUES (?)', key);
+				await this.ctx.storage.sql.exec('INSERT OR IGNORE INTO api_key_statuses (api_key) VALUES (?)', key);
 			}
 
 			return new Response(JSON.stringify({ message: 'API密钥添加成功。' }), {
@@ -853,12 +948,22 @@ export class LoadBalancer extends DurableObject {
 			const pageSize = parseInt(url.searchParams.get('pageSize') || '50', 10);
 			const offset = (page - 1) * pageSize;
 
-			const totalResult = await this.ctx.storage.sql.exec('SELECT COUNT(*) as count FROM api_keys').raw<any>();
+			const totalResult = await this.ctx.storage.sql.exec('SELECT COUNT(*) as count FROM api_key_statuses').raw<any>();
 			const totalArray = Array.from(totalResult);
 			const total = totalArray.length > 0 ? totalArray[0][0] : 0;
 
-			const results = await this.ctx.storage.sql.exec('SELECT api_key FROM api_keys LIMIT ? OFFSET ?', pageSize, offset).raw<any>();
-			const keys = results ? Array.from(results).map((row: any) => row[0]) : [];
+			const results = await this.ctx.storage.sql
+				.exec('SELECT api_key, status, key_group, last_checked_at, failed_count FROM api_key_statuses LIMIT ? OFFSET ?', pageSize, offset)
+				.raw<any>();
+			const keys = results
+				? Array.from(results).map((row: any) => ({
+						api_key: row[0],
+						status: row[1],
+						key_group: row[2],
+						last_checked_at: row[3],
+						failed_count: row[4],
+				  }))
+				: [];
 
 			return new Response(JSON.stringify({ keys, total }), {
 				headers: { 'Content-Type': 'application/json' },
@@ -878,13 +983,28 @@ export class LoadBalancer extends DurableObject {
 
 	private async getRandomApiKey(): Promise<string | null> {
 		try {
-			const results = await this.ctx.storage.sql.exec('SELECT * FROM api_keys ORDER BY RANDOM() LIMIT 1').raw<any>();
-			const keys = Array.from(results);
-			if (keys) {
-				const key = keys[0] as any;
-				console.log(`Gemini Selected API Key: ${key}`);
+			// First, try to get a key from the normal group
+			let results = await this.ctx.storage.sql
+				.exec("SELECT api_key FROM api_key_statuses WHERE key_group = 'normal' ORDER BY RANDOM() LIMIT 1")
+				.raw<any>();
+			let keys = Array.from(results);
+			if (keys && keys.length > 0) {
+				const key = keys[0][0] as string;
+				console.log(`Gemini Selected API Key from normal group: ${key}`);
 				return key;
 			}
+
+			// If no keys in normal group, try the abnormal group
+			results = await this.ctx.storage.sql
+				.exec("SELECT api_key FROM api_key_statuses WHERE key_group = 'abnormal' ORDER BY RANDOM() LIMIT 1")
+				.raw<any>();
+			keys = Array.from(results);
+			if (keys && keys.length > 0) {
+				const key = keys[0][0] as string;
+				console.log(`Gemini Selected API Key from abnormal group: ${key}`);
+				return key;
+			}
+
 			return null;
 		} catch (error) {
 			console.error('获取随机API密钥失败:', error);
