@@ -916,17 +916,16 @@ export class LoadBalancer extends DurableObject {
 				})
 			);
 
-			const invalidKeys = checkResults.filter((result) => !result.valid).map((result) => result.key);
-			if (invalidKeys.length > 0) {
-				console.log('InvalidKeys: ', JSON.stringify(invalidKeys));
-				const batchSize = 500;
-				for (let i = 0; i < invalidKeys.length; i += batchSize) {
-					const batch = invalidKeys.slice(i, i + batchSize);
-					const placeholders = batch.map(() => '?').join(',');
-					const statement = `DELETE FROM api_keys WHERE api_key IN (${placeholders})`;
-					await this.ctx.storage.sql.exec(statement, ...batch);
+			for (const result of checkResults) {
+				if (result.valid) {
+					await this.ctx.storage.sql.exec(
+						"UPDATE api_key_statuses SET status = 'normal', key_group = 'normal', failed_count = 0, last_checked_at = ? WHERE api_key = ?",
+						Date.now(),
+						result.key
+					);
+				} else {
+					await this.ctx.storage.sql.exec('DELETE FROM api_keys WHERE api_key = ?', result.key);
 				}
-				console.log(`移除了 ${invalidKeys.length} 个无效的API密钥。`);
 			}
 
 			return new Response(JSON.stringify(checkResults), {
