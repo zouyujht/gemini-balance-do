@@ -69,7 +69,15 @@ export class LoadBalancer extends DurableObject {
 			const failedCount = row[1] as number;
 
 			try {
-				const response = await fetch(`${BASE_URL}/${API_VERSION}/models?key=${apiKey}`);
+				const response = await fetch(`${BASE_URL}/${API_VERSION}/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify({
+						contents: [{ parts: [{ text: 'hi' }] }],
+					}),
+				});
 				if (response.ok) {
 					// Key is working again, move it back to the normal group
 					await this.ctx.storage.sql.exec(
@@ -109,7 +117,15 @@ export class LoadBalancer extends DurableObject {
 		for (const row of Array.from(normalKeys)) {
 			const apiKey = row[0] as string;
 			try {
-				const response = await fetch(`${BASE_URL}/${API_VERSION}/models?key=${apiKey}`);
+				const response = await fetch(`${BASE_URL}/${API_VERSION}/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify({
+						contents: [{ parts: [{ text: 'hi' }] }],
+					}),
+				});
 				if (response.status === 429) {
 					// Move to abnormal group
 					await this.ctx.storage.sql.exec(
@@ -908,7 +924,15 @@ export class LoadBalancer extends DurableObject {
 			const checkResults = await Promise.all(
 				keys.map(async (key) => {
 					try {
-						const response = await fetch(`${BASE_URL}/${API_VERSION}/models?key=${key}`);
+						const response = await fetch(`${BASE_URL}/${API_VERSION}/models/gemini-2.5-flash:generateContent?key=${key}`, {
+							method: 'POST',
+							headers: {
+								'Content-Type': 'application/json',
+							},
+							body: JSON.stringify({
+								contents: [{ parts: [{ text: 'hi' }] }],
+							}),
+						});
 						return { key, valid: response.ok, error: response.ok ? null : await response.text() };
 					} catch (e: any) {
 						return { key, valid: false, error: e.message };
