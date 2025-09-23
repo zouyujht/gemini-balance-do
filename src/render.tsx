@@ -67,7 +67,7 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 				<title>Gemini API 密钥管理</title>
 				<script src="https://cdn.tailwindcss.com"></script>
 			</head>
-			<body class="bg-gray-100">
+			<body class="bg-slate-100 text-slate-800">
 				{showWarning && (
 					<div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-3 mb-4" role="alert">
 						<strong class="font-bold">安全警告：</strong>
@@ -75,74 +75,73 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 					</div>
 				)}
 				<div class="flex h-screen">
-					<div class="w-64 bg-gray-800 text-white p-4">
-						<h1 class="text-2xl font-bold mb-8">管理面板</h1>
-						<nav>
-							<a href="#" class="block py-2 px-4 rounded bg-gray-700">
-								密钥管理
+					<div class="w-64 bg-slate-800 text-white p-4 flex flex-col">
+						<h1 class="text-2xl font-bold mb-8 text-sky-400">管理面板</h1>
+						<nav class="flex flex-col space-y-2">
+							<a href="#" id="nav-keys-list" class="block py-2.5 px-4 rounded-lg bg-slate-700 transition-colors">
+								密钥列表
+							</a>
+							<a href="#" id="nav-add-keys" class="block py-2.5 px-4 rounded-lg hover:bg-slate-700 transition-colors">
+								添加密钥
 							</a>
 						</nav>
 					</div>
-					<div class="flex-1 p-8">
-						<h2 class="text-3xl font-bold mb-6">Gemini API 密钥管理</h2>
-						<div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-							<div class="bg-white p-6 rounded-lg shadow-md">
-								<h3 class="text-xl font-semibold mb-4">批量添加密钥</h3>
-								<form id="add-keys-form">
-									<textarea
-										id="api-keys"
-										class="w-full h-40 p-2 border rounded bg-gray-50"
-										placeholder="请输入API密钥，每行一个"
-									></textarea>
-									<button type="submit" class="mt-4 w-full px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition">
-										添加密钥
-									</button>
-								</form>
-							</div>
-							<div class="bg-white p-6 rounded-lg shadow-md">
+					<div class="flex-1 p-8 overflow-y-auto">
+						<div id="page-keys-list">
+							<h2 class="text-3xl font-bold mb-6 text-slate-700">密钥列表</h2>
+							<div class="bg-white p-6 rounded-lg shadow-sm">
 								<div class="flex justify-between items-center mb-4">
-									<h3 class="text-xl font-semibold">已存储的密钥</h3>
-									<div>
-										<button id="check-keys-btn" class="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition mr-2">
+									<h3 class="text-xl font-semibold text-slate-600">已存储的密钥</h3>
+									<div class="space-x-2">
+										<button
+											id="check-keys-btn"
+											class="px-4 py-2 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors shadow-sm"
+										>
 											一键检查
 										</button>
-										<button id="refresh-keys-btn" class="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition">
+										<button
+											id="refresh-keys-btn"
+											class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors shadow-sm"
+										>
 											刷新
 										</button>
 										<button
 											id="select-invalid-keys-btn"
-											class="px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600 transition ml-2 hidden"
+											class="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors shadow-sm ml-2 hidden"
 										>
 											勾选无效密钥
 										</button>
 									</div>
 								</div>
-								<div class="max-h-60 overflow-y-auto">
+								<div class="max-h-96 overflow-y-auto border rounded-lg">
 									<table id="keys-table" class="w-full text-left">
-										<thead>
-											<tr class="border-b">
-												<th class="p-2 w-6">
-													<input type="checkbox" id="select-all-keys" />
+										<thead class="bg-slate-50">
+											<tr class="border-b border-slate-200">
+												<th class="p-3 w-6">
+													<input type="checkbox" id="select-all-keys" class="rounded border-slate-300" />
 												</th>
-												<th class="p-2">API 密钥</th>
-												<th class="p-2">状态</th>
+												<th class="p-3 text-slate-600 font-semibold">API 密钥</th>
+												<th class="p-3 text-slate-600 font-semibold">状态</th>
+												<th class="p-3 text-slate-600 font-semibold">分组</th>
+												<th class="p-3 text-slate-600 font-semibold">最后检查时间</th>
+												<th class="p-3 text-slate-600 font-semibold">失败次数</th>
 											</tr>
 										</thead>
-										<tbody></tbody>
+										<tbody class="divide-y divide-slate-200"></tbody>
 									</table>
 								</div>
 								<div id="pagination-controls" class="mt-4 flex justify-center items-center">
 									<button
 										id="prev-page-btn"
-										class="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition disabled:opacity-50"
+										class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors disabled:opacity-50 shadow-sm"
 										disabled
 									>
 										上一页
 									</button>
-									<span id="page-info" class="mx-4 text-gray-600"></span>
+									<span id="page-info" class="mx-4 text-slate-600"></span>
 									<button
 										id="next-page-btn"
-										class="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition disabled:opacity-50"
+										class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors disabled:opacity-50 shadow-sm"
 										disabled
 									>
 										下一页
@@ -150,10 +149,29 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 								</div>
 								<button
 									id="delete-selected-keys-btn"
-									class="mt-4 w-full px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition hidden"
+									class="mt-4 w-full px-4 py-2 bg-rose-500 text-white rounded-lg hover:bg-rose-600 transition-colors hidden shadow-sm"
 								>
 									删除选中
 								</button>
+							</div>
+						</div>
+						<div id="page-add-keys" class="hidden">
+							<h2 class="text-3xl font-bold mb-6 text-slate-700">添加密钥</h2>
+							<div class="bg-white p-6 rounded-lg shadow-sm">
+								<h3 class="text-xl font-semibold mb-4 text-slate-600">批量添加密钥</h3>
+								<form id="add-keys-form">
+									<textarea
+										id="api-keys"
+										class="w-full h-48 p-3 border rounded-lg bg-slate-50 focus:ring-2 focus:ring-teal-500 focus:border-teal-500 transition"
+										placeholder="请输入API密钥，每行一个"
+									></textarea>
+									<button
+										type="submit"
+										class="mt-4 w-full px-4 py-2.5 bg-sky-500 text-white rounded-lg hover:bg-sky-600 transition-colors shadow-sm"
+									>
+										添加密钥
+									</button>
+								</form>
 							</div>
 						</div>
 					</div>
@@ -176,9 +194,43 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 										const pageInfoSpan = document.getElementById('page-info');
 										const selectInvalidKeysBtn = document.getElementById('select-invalid-keys-btn');
 
+										const navKeysList = document.getElementById('nav-keys-list');
+										const navAddKeys = document.getElementById('nav-add-keys');
+										const pageKeysList = document.getElementById('page-keys-list');
+										const pageAddKeys = document.getElementById('page-add-keys');
+
 										let currentPage = 1;
 										const pageSize = 50;
 										let totalPages = 1;
+
+										const showPage = (pageId) => {
+											[pageKeysList, pageAddKeys].forEach(page => {
+												if (page.id === pageId) {
+													page.classList.remove('hidden');
+												} else {
+													page.classList.add('hidden');
+												}
+											});
+											[navKeysList, navAddKeys].forEach(nav => {
+												if (nav.id === \`nav-\${pageId.split('-')[1]}-\${pageId.split('-')[2]}\`) {
+													nav.classList.add('bg-gray-700');
+													nav.classList.remove('hover:bg-gray-700');
+												} else {
+													nav.classList.remove('bg-gray-700');
+													nav.classList.add('hover:bg-gray-700');
+												}
+											});
+										};
+
+										navKeysList.addEventListener('click', (e) => {
+											e.preventDefault();
+											showPage('page-keys-list');
+										});
+
+										navAddKeys.addEventListener('click', (e) => {
+											e.preventDefault();
+											showPage('page-add-keys');
+										});
 
 										const updatePaginationControls = () => {
 												pageInfoSpan.textContent = \`第 \${currentPage} / \${totalPages} 页\`;
@@ -187,7 +239,7 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 										};
 
 										const fetchAndRenderKeys = async () => {
-												keysTableBody.innerHTML = '<tr><td colspan="3" class="p-2 text-center">加载中...</td></tr>';
+												keysTableBody.innerHTML = '<tr><td colspan="7" class="p-2 text-center">加载中...</td></tr>';
 												try {
 												  const response = await fetch(\`/api/keys?page=\${currentPage}&pageSize=\${pageSize}\`);
 												  const { keys, total } = await response.json();
@@ -195,22 +247,27 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 												  totalPages = Math.ceil(total / pageSize);
 												  keysTableBody.innerHTML = '';
 												  if (keys.length === 0) {
-												    keysTableBody.innerHTML = '<tr><td colspan="3" class="p-2 text-center">暂无密钥</td></tr>';
+												    keysTableBody.innerHTML = '<tr><td colspan="7" class="p-2 text-center">暂无密钥</td></tr>';
 												  } else {
 												    keys.forEach(key => {
+												      const statusMap = { normal: '正常', abnormal: '异常' };
 												      const row = document.createElement('tr');
-															row.dataset.key = key;
+												      row.className = 'hover:bg-slate-50 transition-colors';
+												      row.dataset.key = key.api_key;
 												      row.innerHTML = \`
-												        <td class="p-2 w-6"><input type="checkbox" class="key-checkbox" data-key="\${key}" /></td>
-												        <td class="p-2 font-mono">\${key}</td>
-												        <td class="p-2 status-cell">未知</td>
+												        <td class="p-3 w-6"><input type="checkbox" class="key-checkbox rounded border-slate-300" data-key="\${key.api_key}" /></td>
+												        <td class="p-3 font-mono text-sm text-slate-700">\${key.api_key}</td>
+												        <td class="p-3 status-cell">\${statusMap[key.status] || key.status}</td>
+												        <td class="p-3">\${statusMap[key.key_group] || key.key_group}</td>
+												        <td class="p-3 text-sm text-slate-500">\${key.last_checked_at ? new Date(key.last_checked_at).toLocaleString() : 'N/A'}</td>
+												        <td class="p-3 text-center">\${key.failed_count}</td>
 												      \`;
 												      keysTableBody.appendChild(row);
 												    });
 												  }
 												  updatePaginationControls();
 												} catch (error) {
-												  keysTableBody.innerHTML = '<tr><td colspan="3" class="p-2 text-center text-red-500">加载失败</td></tr>';
+												  keysTableBody.innerHTML = '<tr><td colspan="7" class="p-2 text-center text-red-500">加载失败</td></tr>';
 												  console.error('Failed to fetch keys:', error);
 												}
 										};
@@ -284,20 +341,15 @@ export const Render = ({ isAuthenticated, showWarning }: { isAuthenticated: bool
 													headers: { 'Content-Type': 'application/json' },
 													body: JSON.stringify({ keys: keysToCheck }),
 												});
-												const results = await response.json();
-												results.forEach(result => {
-													const row = keysTableBody.querySelector(\`tr[data-key="\${result.key}"]\`);
-													if (row) {
-														const statusCell = row.querySelector('.status-cell');
-														if (statusCell) {
-															statusCell.textContent = result.valid ? '有效' : '无效';
-															statusCell.className = result.valid ? 'p-2 status-cell text-green-500' : 'p-2 status-cell text-red-500';
-														}
-													}
-												});
-												selectInvalidKeysBtn.classList.remove('hidden');
+												if (response.ok) {
+													alert('检查完成。');
+													fetchAndRenderKeys();
+												} else {
+													const result = await response.json();
+													alert(\`检查密钥失败: \${result.error || '未知错误'}\`);
+												}
 											} catch (error) {
-												alert('检查密钥失败，请查看控制台获取更多信息。');
+												alert('请求失败，请检查网络连接。');
 												console.error('Failed to check keys:', error);
 											}
 										});
