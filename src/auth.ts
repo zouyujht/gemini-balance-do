@@ -3,8 +3,8 @@ export function getAuthKey(request: Request, sessionKey?: string): string | unde
     // 先查 cookie
     const cookie = request.headers.get('Cookie');
     if (cookie) {
-        const match = cookie.match(/auth-key=([^;]+)/);
-        if (match) return match[1];
+        const match = cookie.match(/(?:^|;\\s*)auth-key=([^;]+)/);
+        if (match) { try { return decodeURIComponent(match[1]); } catch { return match[1]; } }
     }
     // 再查 Authorization header
     const authHeader = request.headers.get('Authorization');
