@@ -78,6 +78,11 @@
 
 `AUTH_KEY` ： 默认为：`ajielu`，本项目API请求密钥，如果 `FORWARD_CLIENT_KEY_ENABLED` 为 true，那么本项目仅作为一个 Gemini API 代理，无需认证
 
+**注意**：当启用 `FORWARD_CLIENT_KEY_ENABLED` 时，客户端的 API key 可以通过以下方式传递：
+- 查询参数：`?key=your_api_key`
+- Header：`x-goog-api-key: your_api_key`
+- Authorization Header：`Authorization: Bearer your_api_key`
+
 `HOME_ACCESS_KEY`：网页管理面板密码，默认为 `7b18e536c27ab304266db3220b8e000db8fbbe35d6e1fde729a1a1d47303858d`
 
 **强烈建议你在Cloudflare Worker环境变量中修改 `HOME_ACCESS_KEY` 和 `AUTH_KEY` 的值，修改完成后重新部署即可。**

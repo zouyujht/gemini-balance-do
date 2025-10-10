@@ -204,6 +204,7 @@ export class LoadBalancer extends DurableObject {
 			return this.forwardRequestWithLoadBalancing(targetUrl, request);
 		}
 
+		// 传统模式：验证 AUTH_KEY
 		if (authKey) {
 			let isAuthorized = false;
 			// Check key in query parameters
@@ -275,7 +276,15 @@ export class LoadBalancer extends DurableObject {
 			}
 
 			if (this.env.FORWARD_CLIENT_KEY_ENABLED) {
-				return this.forwardRequest(url.toString(), request, headers, ''); // No specific key for forwarded client key
+				// 提取客户端的 API key
+				const clientApiKey = this.extractClientApiKey(request, url);
+
+				if (clientApiKey) {
+					url.searchParams.set('key', clientApiKey);
+					headers.set('x-goog-api-key', clientApiKey);
+				}
+
+				return this.forwardRequest(url.toString(), request, headers, clientApiKey || '');
 			}
 			const apiKey = await this.getRandomApiKey();
 			if (!apiKey) {
@@ -448,6 +457,7 @@ export class LoadBalancer extends DurableObject {
 							model,
 							id,
 							last: [],
+							reasoningLast: [],
 							shared,
 						} as any)
 					)
@@ -555,44 +565,43 @@ export class LoadBalancer extends DurableObject {
 		return cfg;
 	}
 
-private async transformMessages(messages: any[]) {
-	if (!messages) {
-		return {};
-	}
-
-	const contents: any[] = [];
-	let system_instruction;
-
-	for (const item of messages) {
-		switch (item.role) {
-			case 'system':
-				system_instruction = { parts: await this.transformMsg(item) };
-				continue;
-			case 'assistant':
-				item.role = 'model';
-				break;
-			case 'user':
-				break;
-			default:
-				throw new HttpError(`Unknown message role: "${item.role}"`, 400);
+	private async transformMessages(messages: any[]) {
+		if (!messages) {
+			return {};
 		}
 
-		if (system_instruction) {
-			// 修复：确保 parts 是数组后再调用 some 方法
-			if (!contents[0]?.parts || 
-				(Array.isArray(contents[0]?.parts) && !contents[0]?.parts.some((part: any) => part.text))) {
-				contents.unshift({ role: 'user', parts: [{ text: ' ' }] });
+		const contents: any[] = [];
+		let system_instruction;
+
+		for (const item of messages) {
+			switch (item.role) {
+				case 'system':
+					system_instruction = { parts: await this.transformMsg(item) };
+					continue;
+				case 'assistant':
+					item.role = 'model';
+					break;
+				case 'user':
+					break;
+				default:
+					throw new HttpError(`Unknown message role: "${item.role}"`, 400);
 			}
+
+			if (system_instruction) {
+				// 修复：确保 parts 是数组后再调用 some 方法
+				if (!contents[0]?.parts || (Array.isArray(contents[0]?.parts) && !contents[0]?.parts.some((part: any) => part.text))) {
+					contents.unshift({ role: 'user', parts: [{ text: ' ' }] });
+				}
+			}
+
+			contents.push({
+				role: item.role,
+				parts: await this.transformMsg(item),
+			});
 		}
 
-		contents.push({
-			role: item.role,
-			parts: await this.transformMsg(item),
-		});
+		return { system_instruction, contents };
 	}
-
-	return { system_instruction, contents };
-}
 
 	private async transformMsg({ content }: any) {
 		const parts = [];
@@ -708,21 +717,56 @@ private async transformMessages(messages: any[]) {
 
 		const transformCandidatesMessage = (cand: any) => {
 			const message = { role: 'assistant', content: [] as string[] };
+			let reasoningContent = '';
+			let finalContent = '';
+
 			for (const part of cand.content?.parts ?? []) {
 				if (part.text) {
-					message.content.push(part.text);
+					// 检查是否是思考内容
+					// Gemini API 可能使用多种方式标识思考内容
+					const isThoughtContent =
+						part.thoughtToken ||
+						part.thought ||
+						part.thoughtTokens ||
+						(part.executableCode && part.executableCode.language === 'thought') ||
+						// 检查文本是否以思考标记开头
+						(part.text && (part.text.startsWith('<thinking>') || part.text.startsWith('思考：') || part.text.startsWith('Thinking:')));
+
+					if (isThoughtContent) {
+						// 这是思考内容，应该放在 reasoning_content 字段中
+						// 如果文本包含思考标记，需要移除这些标记
+						let cleanText = part.text;
+						if (cleanText.startsWith('<thinking>')) {
+							cleanText = cleanText.replace('<thinking>', '').replace('</thinking>', '');
+						} else if (cleanText.startsWith('思考：')) {
+							cleanText = cleanText.replace('思考：', '');
+						} else if (cleanText.startsWith('Thinking:')) {
+							cleanText = cleanText.replace('Thinking:', '');
+						}
+						reasoningContent += cleanText;
+					} else {
+						// 这是正常的回答内容
+						finalContent += part.text;
+					}
 				}
 			}
 
-			return {
+			const messageObj: any = {
 				index: cand.index || 0,
 				message: {
-					...message,
-					content: message.content.join('') || null,
+					role: 'assistant',
+					content: finalContent || null,
 				},
 				logprobs: null,
 				finish_reason: reasonsMap[cand.finishReason] || cand.finishReason,
 			};
+
+			// 如果有思考内容，添加到响应中
+			if (reasoningContent) {
+				messageObj.message.reasoning_content = reasoningContent;
+			}
+
+			return messageObj;
 		};
 
 		const obj = {
@@ -789,44 +833,142 @@ private async transformMessages(messages: any[]) {
 			for (const cand of candidates) {
 				const { index, content, finishReason } = cand;
 				const { parts } = content;
-				const text = parts.map((p: any) => p.text).join('');
 
-				if (this.last[index] === undefined) {
-					this.last[index] = '';
-				}
+				// 分别处理思考内容和正常内容
+				let reasoningText = '';
+				let finalText = '';
 
-				const lastText = this.last[index] || '';
-				let delta = '';
+				for (const part of parts) {
+					if (part.text) {
+						// 检查是否是思考内容
+						// Gemini API 可能使用多种方式标识思考内容
+						const isThoughtContent =
+							part.thoughtToken ||
+							part.thought ||
+							part.thoughtTokens ||
+							(part.executableCode && part.executableCode.language === 'thought') ||
+							// 检查文本是否以思考标记开头
+							(part.text && (part.text.startsWith('<thinking>') || part.text.startsWith('思考：') || part.text.startsWith('Thinking:')));
 
-				if (text.startsWith(lastText)) {
-					delta = text.substring(lastText.length);
-				} else {
-					// Find the common prefix
-					let i = 0;
-					while (i < text.length && i < lastText.length && text[i] === lastText[i]) {
-						i++;
+						if (isThoughtContent) {
+							// 这是思考内容
+							// 如果文本包含思考标记，需要移除这些标记
+							let cleanText = part.text;
+							if (cleanText.startsWith('<thinking>')) {
+								cleanText = cleanText.replace('<thinking>', '').replace('</thinking>', '');
+							} else if (cleanText.startsWith('思考：')) {
+								cleanText = cleanText.replace('思考：', '');
+							} else if (cleanText.startsWith('Thinking:')) {
+								cleanText = cleanText.replace('Thinking:', '');
+							}
+							reasoningText += cleanText;
+						} else {
+							// 这是正常的回答内容
+							finalText += part.text;
+						}
 					}
-					// Send the rest of the new text as delta.
-					// This might not be perfect for all clients, but it prevents data loss.
-					delta = text.substring(i);
 				}
 
-				this.last[index] = text;
+				// 处理思考内容的流式输出
+				if (reasoningText) {
+					if (!this.reasoningLast) this.reasoningLast = {};
+					if (this.reasoningLast[index] === undefined) {
+						this.reasoningLast[index] = '';
+					}
 
-				const obj = {
-					id: this.id,
-					object: 'chat.completion.chunk',
-					created: Math.floor(Date.now() / 1000),
-					model: this.model,
-					choices: [
-						{
-							index,
-							delta: { content: delta },
-							finish_reason: reasonsMap[finishReason] || finishReason,
-						},
-					],
-				};
-				controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
+					const lastReasoningText = this.reasoningLast[index] || '';
+					let reasoningDelta = '';
+
+					if (reasoningText.startsWith(lastReasoningText)) {
+						reasoningDelta = reasoningText.substring(lastReasoningText.length);
+					} else {
+						// Find the common prefix
+						let i = 0;
+						while (i < reasoningText.length && i < lastReasoningText.length && reasoningText[i] === lastReasoningText[i]) {
+							i++;
+						}
+						reasoningDelta = reasoningText.substring(i);
+					}
+
+					this.reasoningLast[index] = reasoningText;
+
+					if (reasoningDelta) {
+						const reasoningObj = {
+							id: this.id,
+							object: 'chat.completion.chunk',
+							created: Math.floor(Date.now() / 1000),
+							model: this.model,
+							choices: [
+								{
+									index,
+									delta: { reasoning_content: reasoningDelta },
+									finish_reason: null,
+								},
+							],
+						};
+						controller.enqueue(`data: ${JSON.stringify(reasoningObj)}\n\n`);
+					}
+				}
+
+				// 处理正常内容的流式输出
+				if (finalText) {
+					if (this.last[index] === undefined) {
+						this.last[index] = '';
+					}
+
+					const lastText = this.last[index] || '';
+					let delta = '';
+
+					if (finalText.startsWith(lastText)) {
+						delta = finalText.substring(lastText.length);
+					} else {
+						// Find the common prefix
+						let i = 0;
+						while (i < finalText.length && i < lastText.length && finalText[i] === lastText[i]) {
+							i++;
+						}
+						// Send the rest of the new text as delta.
+						// This might not be perfect for all clients, but it prevents data loss.
+						delta = finalText.substring(i);
+					}
+
+					this.last[index] = finalText;
+
+					if (delta) {
+						const obj = {
+							id: this.id,
+							object: 'chat.completion.chunk',
+							created: Math.floor(Date.now() / 1000),
+							model: this.model,
+							choices: [
+								{
+									index,
+									delta: { content: delta },
+									finish_reason: null,
+								},
+							],
+						};
+						controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
+					}
+				}
+
+				// 如果有完成原因，发送完成信号
+				if (finishReason) {
+					const finishObj = {
+						id: this.id,
+						object: 'chat.completion.chunk',
+						created: Math.floor(Date.now() / 1000),
+						model: this.model,
+						choices: [
+							{
+								index,
+								delta: {},
+								finish_reason: reasonsMap[finishReason] || finishReason,
+							},
+						],
+					};
+					controller.enqueue(`data: ${JSON.stringify(finishObj)}\n\n`);
+				}
 			}
 		}
 	}
@@ -1006,6 +1148,30 @@ private async transformMessages(messages: any[]) {
 	// Helper Methods
 	// =================================================================================================
 
+	/**
+	 * 从请求中提取客户端的 API key
+	 * 支持多种传递方式：查询参数、x-goog-api-key header、Authorization header
+	 */
+	private extractClientApiKey(request: Request, url: URL): string | null {
+		// 从查询参数中提取
+		if (url.searchParams.has('key')) {
+			const key = url.searchParams.get('key');
+			if (key) return key;
+		}
+
+		// 从 x-goog-api-key header 中提取
+		const googApiKey = request.headers.get('x-goog-api-key');
+		if (googApiKey) return googApiKey;
+
+		// 从 Authorization header 中提取 (Bearer token)
+		const authHeader = request.headers.get('Authorization');
+		if (authHeader && authHeader.startsWith('Bearer ')) {
+			return authHeader.substring(7);
+		}
+
+		return null;
+	}
+
 	private async getRandomApiKey(): Promise<string | null> {
 		try {
 			// First, try to get a key from the normal group
@@ -1043,19 +1209,28 @@ private async transformMessages(messages: any[]) {
 
 		const authHeader = request.headers.get('Authorization');
 		apiKey = authHeader?.replace('Bearer ', '') ?? null;
-		if (!apiKey) {
-			return new Response('No API key found in the client headers,please check your request!', { status: 400 });
-		}
 
-		if (authKey && !this.env.FORWARD_CLIENT_KEY_ENABLED) {
-			const authHeader = request.headers.get('Authorization');
-			const token = authHeader?.replace('Bearer ', '');
-			if (token !== authKey) {
-				return new Response('Unauthorized', { status: 401, headers: fixCors({}).headers });
-			}
-			apiKey = await this.getRandomApiKey();
+		// 如果启用了客户端 key 透传，直接使用客户端提供的 key
+		if (this.env.FORWARD_CLIENT_KEY_ENABLED) {
 			if (!apiKey) {
-				return new Response('No API keys configured in the load balancer.', { status: 500 });
+				return new Response('No API key found in the client headers,please check your request!', { status: 400 });
+			}
+			// 直接使用客户端的 API key，不需要验证
+		} else {
+			// 传统模式：验证 AUTH_KEY 并使用负载均衡
+			if (!apiKey) {
+				return new Response('No API key found in the client headers,please check your request!', { status: 400 });
+			}
+
+			if (authKey) {
+				const token = authHeader?.replace('Bearer ', '');
+				if (token !== authKey) {
+					return new Response('Unauthorized', { status: 401, headers: fixCors({}).headers });
+				}
+				apiKey = await this.getRandomApiKey();
+				if (!apiKey) {
+					return new Response('No API keys configured in the load balancer.', { status: 500 });
+				}
 			}
 		}
 
